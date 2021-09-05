@@ -56,13 +56,13 @@ This is the implementation of the paper [Efficiently Summarizing Text and Graph 
 
 1. ```cd ~; mkdir data; cd data```
 2. multi-news-500 (Preprocessed and truncated data):
-      - Get it from [original source](https://drive.google.com/drive/folders/1qqSnxiaNVEctgiz2g-Wd3a9kwWuwMA07) and rename the folder as multi-news-500; Also, rename xxx.txt.src.yyy as xxx.source and xxx.txt.tgt.yyy as xxx.target
+      - Get it from [original source](https://drive.google.com/drive/folders/1qqSnxiaNVEctgiz2g-Wd3a9kwWuwMA07) and rename the folder as `multi-news-500`; Also, rename xxx.txt.src.yyy as xxx.source and xxx.txt.tgt.yyy as xxx.target
 
 3. multi-news-full-clean (Preprocessed but not truncated):
-      - Get it from [original source](https://drive.google.com/open?id=1qZ3zJBv0zrUy4HVWxnx33IsrHGimXLPy) and rename the folder as multi-news-full-clean; Also, rename the files inside this folder as follows: xxx.txt.src as xxx.source and xxx.txt.tgt as xxx.target
+      - Get it from [original source](https://drive.google.com/open?id=1qZ3zJBv0zrUy4HVWxnx33IsrHGimXLPy) and rename the folder as `multi-news-full-clean`; Also, rename the files inside this folder as follows: xxx.txt.src as xxx.source and xxx.txt.tgt as xxx.target
 
 4. multi-news-full-raw (not processed and not truncated) -- This is only needed for graph construction in BART-Long-Graph models.
-      - Get it from [original source](https://drive.google.com/drive/folders/1uDarzpu2HFc-vjXNJCRv2NIHzakpSGOw) and rename the folder as multi-news-full-raw; Also, rename the files inside this folder as follows: xxx.src as xxx.source and xxx.tgt as xxx.target
+      - Get it from [original source](https://drive.google.com/drive/folders/1uDarzpu2HFc-vjXNJCRv2NIHzakpSGOw) and rename the folder as `multi-news-full-raw`; Also, rename the files inside this folder as follows: xxx.src as xxx.source and xxx.tgt as xxx.target
 
 ## Code Setup
 - ```cd ~; git clone git@github.com:amazon-research/BartGraphSumm.git```
