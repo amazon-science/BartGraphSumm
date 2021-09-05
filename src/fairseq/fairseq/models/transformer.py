@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+#Copyright (c) Facebook, Inc. and its affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from fairseq import options, utils
 from fairseq.models import (
     FairseqEncoder,
@@ -26,6 +27,7 @@ from fairseq.modules import (
     SinusoidalPositionalEmbedding,
     TransformerDecoderLayer,
     TransformerEncoderLayer,
+    GradMultiply
 )
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
 from torch import Tensor
@@ -313,6 +315,11 @@ class TransformerEncoder(FairseqEncoder):
 
         self.dropout = args.dropout
         self.encoder_layerdrop = args.encoder_layerdrop
+        self.attention_window = getattr(args, 'attention_window', None)
+        self.gradient_checkpointing = getattr(args, 'gradient_checkpointing', False)
+        self.sentence_ranker = getattr(args, 'sentence_ranker', False)
+        self.learn_ranker_pos_emb = getattr(args, 'learn_ranker_pos_emb', False)
+        self.linear_graph = getattr(args, 'linear_graph', False)
 
         embed_dim = embed_tokens.embedding_dim
         self.padding_idx = embed_tokens.padding_idx
@@ -322,6 +329,18 @@ class TransformerEncoder(FairseqEncoder):
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
 
+        
+        if self.sentence_ranker and self.learn_ranker_pos_emb:
+            self.embed_rank_positions = PositionalEmbedding(
+                                        args.max_ranking_positions,
+                                        embed_dim,
+                                        self.padding_idx,
+                                        learned = args.encoder_learned_pos
+                                    )
+
+            self.pos_proj = torch.nn.Linear(2*embed_dim, embed_dim, bias=False)
+
+        
         self.embed_positions = (
             PositionalEmbedding(
                 args.max_source_positions,
@@ -352,6 +371,9 @@ class TransformerEncoder(FairseqEncoder):
         ])
         self.num_layers = len(self.layers)
 
+        if self.linear_graph:
+            self.graph_layer = self.build_encoder_layer(args) 
+
         if args.encoder_normalize_before:
             self.layer_norm = LayerNorm(embed_dim)
         else:
@@ -364,11 +386,47 @@ class TransformerEncoder(FairseqEncoder):
     def build_encoder_layer(self, args):
         return TransformerEncoderLayer(args)
 
-    def forward_embedding(self, src_tokens):
+    def forward_extra_position_embedding(self, src_positions):
+        if self.learn_ranker_pos_emb:
+            return F.embedding(
+                src_positions,
+                self.embed_rank_positions.weight,
+                self.embed_rank_positions.padding_idx,
+                self.embed_rank_positions.max_norm,
+                self.embed_rank_positions.norm_type,
+                self.embed_rank_positions.scale_grad_by_freq,
+                self.embed_rank_positions.sparse,
+            ) 
+
+        else:
+            return F.embedding(
+                src_positions,
+                self.embed_positions.weight,
+                self.embed_positions.padding_idx,
+                self.embed_positions.max_norm,
+                self.embed_positions.norm_type,
+                self.embed_positions.scale_grad_by_freq,
+                self.embed_positions.sparse,
+            ) 
+        
+
+    def forward_embedding(self, src_tokens, src_positions=None):
         # embed tokens and positions
         x = embed = self.embed_scale * self.embed_tokens(src_tokens)
-        if self.embed_positions is not None:
-            x = embed + self.embed_positions(src_tokens)
+
+        if self.sentence_ranker and self.learn_ranker_pos_emb:
+            pos_emb = self.embed_positions(src_tokens)
+            #pos_emb = GradMultiply.apply(pos_emb, 1.0/10)
+            rank_emb = self.forward_extra_position_embedding(src_positions)
+            #rank_emb = GradMultiply.apply(rank_emb, 1.0/10)
+            #x = x + GradMultiply.apply(self.pos_proj(torch.cat((pos_emb, rank_emb), -1)), 10.0)
+            x = x + self.pos_proj(torch.cat((pos_emb, rank_emb) , -1))
+
+        else:
+            if self.embed_positions is not None:
+                x = embed + self.embed_positions(src_tokens)
+            if self.sentence_ranker and src_positions is not None:
+                x = x + self.forward_extra_position_embedding(src_positions)
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -376,11 +434,49 @@ class TransformerEncoder(FairseqEncoder):
             x = self.quant_noise(x)
         return x, embed
 
+    def merge_sources(
+        self,
+        source1,
+        source1_lengths,
+        source2,
+        source2_lengths,
+        source1_x,
+        source2_x,
+        source1_emb,
+        source2_emb,
+    ):
+        """ Module to merge two encoders """ # Not a FairSeq Module
+        total_lengths = source1_lengths + source2_lengths
+        seq1_len = source1.size(1)
+        seq2_len = source2.size(1)
+        source_merge = torch.cat([source1, source2], 1)
+        source_x_merge = torch.cat([source1_x, source2_x], 0) # T x B x C
+        source_emb_merge = torch.cat([source1_emb, source2_emb], 1) # B x T x C
+
+        batch_size = source1.size(0)
+
+        for i in range(batch_size):
+            source_merge[i,:] = torch.cat([source1[i,:source1_lengths[i]], source2[i,:source2_lengths[i]], \
+                    source1[i,source1_lengths[i]:], source2[i,source2_lengths[i]:] ], 0)
+            source_x_merge[:,i,:] = torch.cat([source1_x[:source1_lengths[i],i,:], source2_x[:source2_lengths[i],i,:], \
+                    source1_x[source1_lengths[i]:,i,:], source2_x[source2_lengths[i]:,i,:] ], 0)
+            source_emb_merge[i,:,:] = torch.cat([source1_emb[i,:source1_lengths[i],:], source2_emb[i,:source2_lengths[i],:], \
+                    source1_emb[i,source1_lengths[i]:,:], source2_emb[i,source2_lengths[i]:,:] ], 0)
+
+        return source_x_merge, source_emb_merge, source_merge, total_lengths
+
+
+
+
+
     def forward(
         self,
         src_tokens,
         src_lengths,
         return_all_hiddens: bool = False,
+        src_positions = None, # Not FairSeq variable
+        graph_tokens = None,  # Not FairSeq variable
+        graph_lengths = None, # Not FairSeq variable
     ):
         """
         Args:
@@ -403,7 +499,21 @@ class TransformerEncoder(FairseqEncoder):
                   hidden states of shape `(src_len, batch, embed_dim)`.
                   Only populated if *return_all_hiddens* is True.
         """
-        x, encoder_embedding = self.forward_embedding(src_tokens)
+        if self.attention_window is not None:
+            seqlen = src_tokens.size(1)
+            padding_len = (self.attention_window - seqlen % self.attention_window) % self.attention_window
+            if padding_len > 0:
+                src_tokens = F.pad(src_tokens, (0, padding_len), value=self.padding_idx)
+                if src_positions is not None:
+                    src_positions = F.pad(src_positions, (0, padding_len), value=self.padding_idx)
+            # Create attention mask
+            attention_mask = torch.zeros_like(src_tokens) # local attention
+            attention_mask[src_tokens==self.padding_idx] = -1 # no attention
+            attention_mask[src_tokens==2] = 1 # global attention
+        else:
+            attention_mask = None
+
+        x, encoder_embedding = self.forward_embedding(src_tokens, src_positions)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -413,9 +523,68 @@ class TransformerEncoder(FairseqEncoder):
 
         encoder_states = [] if return_all_hiddens else None
 
+        if graph_tokens is not None:
+            # **Run first layer of actual transformer encoder**
+            x = self.layers[0](x, encoder_padding_mask, attn_mask=attention_mask)
+           
+            # **Run the graph encoding  transformer layer**
+            # Adjust length based on context window
+            if self.attention_window is not None:
+                seqlen = graph_tokens.size(1)
+                padding_len = (self.attention_window - seqlen % self.attention_window) % self.attention_window
+                if padding_len > 0:
+                    graph_tokens = F.pad(graph_tokens, (0, padding_len), value=self.padding_idx)
+                # Create attention mask
+                graph_attention_mask = torch.zeros_like(graph_tokens) # local attention
+                graph_attention_mask[graph_tokens==self.padding_idx] = -1 # no attention
+                graph_attention_mask[graph_tokens==2] = 1 # global attention
+            else:
+                graph_attention_mask = None
+            # Run the graph encoder
+            graph_x, graph_encoder_embedding = self.forward_embedding(graph_tokens)
+            graph_x = graph_x.transpose(0,1)
+            graph_encoder_padding_mask = graph_tokens.eq(self.padding_idx)
+            graph_x = self.graph_layer(graph_x, graph_encoder_padding_mask, attn_mask = graph_attention_mask)
+            # Now merge src and graph outputs so far
+            x, encoder_embedding, src_tokens, src_lengths  = self.merge_sources(
+                source1 = src_tokens,
+                source1_lengths = src_lengths,
+                source2 = graph_tokens,
+                source2_lengths = graph_lengths,
+                source1_x = x,
+                source2_x = graph_x,
+                source1_emb = encoder_embedding,
+                source2_emb = graph_encoder_embedding,
+            )
+            encoder_padding_mask = src_tokens.eq(self.padding_idx)
+            # Recalucate the attention mask:
+            if self.attention_window is not None:
+                # This time it is always a multiple of context window size
+                attention_mask = torch.zeros_like(src_tokens) # local attention
+                attention_mask[src_tokens==self.padding_idx] = -1 # no attention
+                attention_mask[src_tokens==2] = 1 # global attention
+            else:
+                attention_mask = None
+            start_idx = 1
+        else:
+            start_idx = 0
+
         # encoder layers
-        for layer in self.layers:
-            x = layer(x, encoder_padding_mask)
+        for layer in self.layers[start_idx:]:
+            if self.gradient_checkpointing and self.training:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                x = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
+                    x,
+                    encoder_padding_mask,
+                    attention_mask,
+                )
+
+            else:
+                x = layer(x, encoder_padding_mask, attn_mask=attention_mask)
             if return_all_hiddens:
                 assert encoder_states is not None
                 encoder_states.append(x)
@@ -548,6 +717,8 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         self.embed_tokens = embed_tokens
 
         self.embed_scale = 1.0 if args.no_scale_embedding else math.sqrt(embed_dim)
+
+        self.gradient_checkpointing = getattr(args, 'gradient_checkpointing', False)
 
         if not args.adaptive_input and args.quant_noise_pq > 0:
             self.quant_noise = apply_quant_noise_(
@@ -749,16 +920,47 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             else:
                 self_attn_mask = None
 
-            x, layer_attn, _ = layer(
-                x,
-                encoder_out.encoder_out if encoder_out is not None else None,
-                encoder_out.encoder_padding_mask if encoder_out is not None else None,
-                incremental_state,
-                self_attn_mask=self_attn_mask,
-                self_attn_padding_mask=self_attn_padding_mask,
-                need_attn=bool((idx == alignment_layer)),
-                need_head_weights=bool((idx == alignment_layer)),
-            )
+            if self.training and self.gradient_checkpointing:
+                if not bool((idx == alignment_layer)):
+                    x, layer_attn, _ = torch.utils.checkpoint.checkpoint(
+                        layer,
+                        x,
+                        encoder_out.encoder_out if encoder_out is not None else None,
+                        encoder_out.encoder_padding_mask if encoder_out is not None else None,
+                        incremental_state,
+                        None, 
+                        None,
+                        self_attn_mask,
+                        self_attn_padding_mask,
+                    )
+
+                else:
+                    x, layer_attn, _ = torch.utils.checkpoint.checkpoint(
+                        layer,
+                        x,
+                        encoder_out.encoder_out if encoder_out is not None else None,
+                        encoder_out.encoder_padding_mask if encoder_out is not None else None,
+                        incremental_state,
+                        None, 
+                        None,
+                        self_attn_mask,
+                        self_attn_padding_mask,
+                        torch.ones((1,1)),
+                        torch.ones((1,1)),
+                    )
+                
+            else:
+
+                x, layer_attn, _ = layer(
+                    x,
+                    encoder_out.encoder_out if encoder_out is not None else None,
+                    encoder_out.encoder_padding_mask if encoder_out is not None else None,
+                    incremental_state,
+                    self_attn_mask=self_attn_mask,
+                    self_attn_padding_mask=self_attn_padding_mask,
+                    need_attn=bool((idx == alignment_layer)),
+                    need_head_weights=bool((idx == alignment_layer)),
+                )
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
                 attn = layer_attn.float().to(x)

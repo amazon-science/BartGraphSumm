@@ -71,11 +71,36 @@ class BARTModel(TransformerModel):
         if classification_head_name is not None:
             features_only = True
 
-        encoder_out = self.encoder(
-            src_tokens,
-            src_lengths=src_lengths,
-            **kwargs,
-        )
+        if getattr(self.args, 'sentence_ranker', False):
+            src_positions = kwargs['src_positions']
+            del kwargs['src_positions']
+            encoder_out = self.encoder(
+                src_tokens,
+                src_lengths=src_lengths,
+                src_positions=src_positions,
+                **kwargs,
+            )
+
+        elif getattr(self.args, 'linear_graph', False):
+            graph_tokens = kwargs['graph_tokens']
+            graph_lengths = kwargs['graph_lengths']
+            del kwargs['graph_lengths']
+            del kwargs['graph_tokens']
+            encoder_out = self.encoder(
+                src_tokens,
+                src_lengths=src_lengths,
+                graph_tokens=graph_tokens,
+                graph_lengths=graph_lengths,
+                **kwargs
+            )
+            kwargs['src_lengths'] = src_lengths + graph_lengths
+
+        else:
+            encoder_out = self.encoder(
+                src_tokens,
+                src_lengths=src_lengths,
+                **kwargs,
+            )
         x, extra = self.decoder(
             prev_output_tokens,
             encoder_out=encoder_out,
@@ -302,6 +327,39 @@ def bart_base_architecture(args):
     args.encoder_attention_heads = getattr(args, 'encoder_attention_heads', 12)
     args.decoder_layers = getattr(args, 'decoder_layers', 6)
     args.decoder_attention_heads = getattr(args, 'decoder_attention_heads', 12)
+    bart_large_architecture(args)
+
+@register_model_architecture('bart', 'bart_large_long')
+def bart_large_long_architecture(args):
+    args.attention_window = getattr(args, 'attention_window', 128)
+    args.gradient_checkpointing = getattr(args, 'gradient_checkpointing', True)
+    args.max_source_positions = 4096
+    bart_large_architecture(args)
+
+@register_model_architecture('bart', 'bart_large_long_graph_ranker')
+def bart_large_long_architecture(args):
+    args.attention_window = getattr(args, 'attention_window', 128)
+    args.gradient_checkpointing = getattr(args, 'gradient_checkpointing', True)
+    args.max_source_positions = 4096
+    args.sentence_ranker = getattr(args, 'sentence_ranker', True)
+    args.max_ranking_positions = getattr(args, 'max_ranking_positions', 512)
+    args.learn_ranker_pos_emb = getattr(args, 'learn_ranker_pos_emb', True)
+    bart_large_architecture(args)
+
+@register_model_architecture('bart', 'bart_large_graph_ranker')
+def bart_large_long_architecture(args):
+    args.sentence_ranker = getattr(args, 'sentence_ranker', True)
+    args.max_ranking_positions = getattr(args, 'max_ranking_positions', 512)
+    args.learn_ranker_pos_emb = getattr(args, 'learn_ranker_pos_emb', True)
+    bart_large_architecture(args)
+
+
+@register_model_architecture('bart', 'bart_large_long_graph_linear')
+def bart_large_long_architecture(args):
+    args.attention_window = getattr(args, 'attention_window', 128)
+    args.gradient_checkpointing = getattr(args, 'gradient_checkpointing', True)
+    args.max_source_positions = 4096
+    args.linear_graph = getattr(args, 'linear_graph', True)
     bart_large_architecture(args)
 
 

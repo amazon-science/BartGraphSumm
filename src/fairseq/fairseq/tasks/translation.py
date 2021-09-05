@@ -39,7 +39,10 @@ def load_langpair_dataset(
     combine, dataset_impl, upsample_primary,
     left_pad_source, left_pad_target, max_source_positions,
     max_target_positions, prepend_bos=False, load_alignments=False,
-    truncate_source=False, append_source_id=False
+    truncate_source=False, append_source_id=False,
+    extra_input=None,
+    enable_graph_encoder=False,
+    graph_split_index=1
 ):
 
     def split_exists(split, src, tgt, lang, data_path):
@@ -119,6 +122,13 @@ def load_langpair_dataset(
             align_dataset = data_utils.load_indexed_dataset(align_path, None, dataset_impl)
 
     tgt_dataset_sizes = tgt_dataset.sizes if tgt_dataset is not None else None
+    
+    #Add the extra inputs if exist
+    if extra_input is not None:
+        extra_input_dataset = data_utils.load_extra_dataset(os.path.join(extra_input, '{}.graph'.format("val" if split=="valid" else split)))
+    else:
+        extra_input_dataset = None
+
     return LanguagePairDataset(
         src_dataset, src_dataset.sizes, src_dict,
         tgt_dataset, tgt_dataset_sizes, tgt_dict,
@@ -126,7 +136,10 @@ def load_langpair_dataset(
         left_pad_target=left_pad_target,
         max_source_positions=max_source_positions,
         max_target_positions=max_target_positions,
-        align_dataset=align_dataset, eos=eos
+        align_dataset=align_dataset, eos=eos,
+        extra_input_dataset=extra_input_dataset,
+        enable_graph_encoder=enable_graph_encoder,
+        graph_split_index=graph_split_index
     )
 
 
@@ -176,6 +189,13 @@ class TranslationTask(FairseqTask):
                             help='amount to upsample primary dataset')
         parser.add_argument('--truncate-source', action='store_true', default=False,
                             help='truncate source to max-source-positions')
+        parser.add_argument('--extra-input', default=None, type=str, metavar='EXTRA',
+                            help='extra input path to the seq2seq model')
+        parser.add_argument('--enable-graph-encoder', action='store_true', default=False,
+                            help='enable this argument for dual encoding of general text and graph text')
+        parser.add_argument('--graph-split-index', type=int, default=952,
+                            help='split the input based on this index to get general text and graph text') #TODO: fix this
+
 
         # options for reporting BLEU during validation
         parser.add_argument('--eval-bleu', action='store_true',
@@ -255,10 +275,24 @@ class TranslationTask(FairseqTask):
             max_target_positions=self.args.max_target_positions,
             load_alignments=self.args.load_alignments,
             truncate_source=self.args.truncate_source,
+            extra_input=self.args.extra_input,
+            enable_graph_encoder=self.args.enable_graph_encoder,
+            graph_split_index=self.args.graph_split_index
+
         )
 
-    def build_dataset_for_inference(self, src_tokens, src_lengths):
-        return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary)
+    def build_dataset_for_inference(self, src_tokens, src_lengths, ids=None, extra_input=None):
+        if extra_input is None:
+            return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary,
+                    enable_graph_encoder=self.args.enable_graph_encoder,
+                    graph_split_index=self.args.graph_split_index)
+        else:
+            if not hasattr(self, 'extra_input_dataset'):
+                self.extra_input_dataset = data_utils.load_extra_dataset(os.path.join(extra_input, 'test.graph'))
+            batch_extra_input_dataset = [self.extra_input_dataset[id_] for id_ in ids] # reordering the index ids with true ids
+            return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary, extra_input_dataset=batch_extra_input_dataset)
+
+            
 
     def build_model(self, args):
         model = super().build_model(args)

@@ -51,7 +51,16 @@ class Encoder:
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v:k for k, v in self.byte_encoder.items()}
         self.bpe_ranks = dict(zip(bpe_merges, range(len(bpe_merges))))
-        self.cache = {}
+        self.cache = {"<s>":"<s>",
+                      " <s>":"<s>",
+                      "\u0120<s>":"<s>",
+                      "</s>":"</s>",
+                      " </s>":"</s>",
+                      "\u0120</s>":"</s>",
+                      "<mask>": "<mask>",
+                      "\u0120<mask>": "<mask>",
+                      " <mask>": "<mask>"
+                      }
 
         try:
             import regex as re
@@ -60,7 +69,7 @@ class Encoder:
             raise ImportError('Please install regex with: pip install regex')
 
         # Should haved added re.IGNORECASE so BPE merges can happen for capitalized versions of contractions
-        self.pat = self.re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+        self.pat = self.re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d|<s>| <s>|</s>| </s>|<mask>| <mask>| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
     def bpe(self, token):
         if token in self.cache:
@@ -105,9 +114,13 @@ class Encoder:
 
     def encode(self, text):
         bpe_tokens = []
+        #print(self.re.findall(self.pat, text))
         for token in self.re.findall(self.pat, text):
             token = ''.join(self.byte_encoder[b] for b in token.encode('utf-8'))
+            #print(token)
             bpe_tokens.extend(self.encoder[bpe_token] for bpe_token in self.bpe(token).split(' '))
+            #print(self.bpe(token).split(' '))
+        #print(bpe_tokens)
         return bpe_tokens
 
     def decode(self, tokens):

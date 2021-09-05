@@ -450,6 +450,9 @@ def add_optimization_args(parser):
                        help='stop training when the learning rate reaches this minimum')
     group.add_argument('--use-bmuf', default=False, action='store_true',
                        help='specify global optimizer for syncing models on different GPUs/shards')
+
+    group.add_argument('--freeze-rest-pattern', nargs='*', default=None, type=str,
+                       help='list a patten of variable named which are not freeze, but rest of them are')
     # fmt: on
     return group
 

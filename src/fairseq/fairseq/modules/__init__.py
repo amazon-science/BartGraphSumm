@@ -23,6 +23,7 @@ from .learned_positional_embedding import LearnedPositionalEmbedding
 from .lightweight_convolution import LightweightConv, LightweightConv1dTBC
 from .linearized_convolution import LinearizedConvolution
 from .multihead_attention import MultiheadAttention
+from .longformer_multihead_attention import LongformerMultiheadAttention
 from .positional_embedding import PositionalEmbedding
 from .scalar_bias import ScalarBias
 from .sinusoidal_positional_embedding import SinusoidalPositionalEmbedding
@@ -57,6 +58,7 @@ __all__ = [
     'LightweightConv',
     'LinearizedConvolution',
     'MultiheadAttention',
+    'LongformerMultiheadAttention',
     'PositionalEmbedding',
     'ScalarBias',
     'SinusoidalPositionalEmbedding',

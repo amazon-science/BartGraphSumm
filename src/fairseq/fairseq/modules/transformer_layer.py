@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from fairseq import utils
-from fairseq.modules import LayerNorm, MultiheadAttention
+from fairseq.modules import LayerNorm, MultiheadAttention, LongformerMultiheadAttention
 from fairseq.modules.quant_noise import quant_noise
 from torch import Tensor
 
@@ -32,6 +32,7 @@ class TransformerEncoderLayer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.embed_dim = args.encoder_embed_dim
+        self.attention_window = getattr(args, "attention_window", None)
         self.quant_noise = getattr(args, "quant_noise_pq", 0)
         self.quant_noise_block_size = getattr(args, "quant_noise_pq_block_size", 8)
         self.self_attn = self.build_self_attention(self.embed_dim, args)
@@ -53,6 +54,7 @@ class TransformerEncoderLayer(nn.Module):
         )
 
         self.final_layer_norm = LayerNorm(self.embed_dim)
+        
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size)
@@ -61,14 +63,26 @@ class TransformerEncoderLayer(nn.Module):
         return quant_noise(nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size)
 
     def build_self_attention(self, embed_dim, args):
-        return MultiheadAttention(
-            embed_dim,
-            args.encoder_attention_heads,
-            dropout=args.attention_dropout,
-            self_attention=True,
-            q_noise=self.quant_noise,
-            qn_block_size=self.quant_noise_block_size,
-        )
+        if self.attention_window is not None:
+            return LongformerMultiheadAttention(
+                embed_dim,
+                args.encoder_attention_heads,
+                dropout=args.attention_dropout,
+                self_attention=True,
+                q_noise=self.quant_noise,
+                qn_block_size=self.quant_noise_block_size,
+                attention_window=self.attention_window,
+            )
+
+        else:
+            return MultiheadAttention(
+                embed_dim,
+                args.encoder_attention_heads,
+                dropout=args.attention_dropout,
+                self_attention=True,
+                q_noise=self.quant_noise,
+                qn_block_size=self.quant_noise_block_size,
+            )
 
     def upgrade_state_dict_named(self, state_dict, name):
         """
@@ -104,7 +118,8 @@ class TransformerEncoderLayer(nn.Module):
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
         if attn_mask is not None:
-            attn_mask = attn_mask.masked_fill(attn_mask.to(torch.bool), -1e8)
+            if self.attention_window is None:
+                attn_mask = attn_mask.masked_fill(attn_mask.to(torch.bool), -1e8)
         # anything in original attn_mask = 1, becomes -1e8
         # anything in original attn_mask = 0, becomes 0
         # Note that we cannot use -inf here, because at some edge cases,
@@ -166,6 +181,7 @@ class TransformerDecoderLayer(nn.Module):
         self.quant_noise_block_size = getattr(args, "quant_noise_pq_block_size", 8)
 
         self.cross_self_attention = getattr(args, "cross_self_attention", False)
+        self.gradient_checkpointing = getattr(args, "gradient_checkpointing", False)
 
         self.self_attn = self.build_self_attention(
             self.embed_dim,
@@ -268,7 +284,7 @@ class TransformerDecoderLayer(nn.Module):
         """
         if need_head_weights:
             need_attn = True
-
+            need_head_weights = True #NOTE: hack to make checkpointing to work on bool; during checkpointing its a tensor
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
@@ -374,7 +390,14 @@ class TransformerDecoderLayer(nn.Module):
             else:
                 self_attn_state = [saved_state["prev_key"], saved_state["prev_value"]]
             return x, attn, self_attn_state
-        return x, attn, None
+        
+        if self.training and self.gradient_checkpointing:#NOTE: hack to avoid none type variable error in gradient checkpointing
+            if attn is not None:
+                return x, attn, attn
+            else:
+                return x, x, x 
+        else:
+            return x, attn, None
 
     def make_generation_fast_(self, need_attn: bool = False, **kwargs):
         self.need_attn = need_attn

@@ -115,6 +115,38 @@ def collate(
             batch['alignments'] = alignments
             batch['align_weights'] = align_weights
 
+    if samples[0].get('extra_input', None) is not None:
+        # Convert extra input as sentence ranking markers; right 
+        # now that's the only purpose we use extra input for.
+        # In future, things may be very different.
+        extra_input_tokens = [sample['extra_input'] for sample in samples]
+        sorted_extra_input_tokens = []
+        for i in range(len(extra_input_tokens)):
+            sorted_extra_input_tokens.append(extra_input_tokens[sort_order[i]])
+        extra_input = torch.zeros_like(src_tokens)
+        #print(src_tokens)
+        #print(sorted_extra_input_tokens, len(sorted_extra_input_tokens))
+        for ind, inp in enumerate(sorted_extra_input_tokens):
+            j = 0
+            for i,t in enumerate(src_tokens[ind].tolist()):
+                if t==eos_idx and j<len(inp)-1:
+                    j += 1 
+                extra_input[ind,i] = inp[j]
+            #print(extra_input[ind])
+        batch['net_input']['src_positions'] = extra_input
+
+    if samples[0].get('graph', None) is not None:
+        ## This means that we are running two encoders one for source
+        ## and another for the graph text (in future it can be GNNs)
+        graph_tokens = merge('graph', left_pad=left_pad_source)
+        # sort by descending source length
+        graph_lengths = torch.LongTensor([s['graph'].numel() for s in samples])
+        graph_lengths = graph_lengths.index_select(0, sort_order)
+        graph_tokens = graph_tokens.index_select(0, sort_order)
+        batch['net_input']['graph_tokens'] = graph_tokens
+        batch['net_input']['graph_lengths'] = graph_lengths
+
+            
     return batch
 
 
@@ -159,7 +191,10 @@ class LanguagePairDataset(FairseqDataset):
         shuffle=True, input_feeding=True,
         remove_eos_from_source=False, append_eos_to_target=False,
         align_dataset=None,
-        append_bos=False, eos=None
+        append_bos=False, eos=None,
+        extra_input_dataset=None,
+        enable_graph_encoder=False,
+        graph_split_index=1
     ):
         if tgt_dict is not None:
             assert src_dict.pad() == tgt_dict.pad()
@@ -182,6 +217,9 @@ class LanguagePairDataset(FairseqDataset):
         self.remove_eos_from_source = remove_eos_from_source
         self.append_eos_to_target = append_eos_to_target
         self.align_dataset = align_dataset
+        self.extra_input_dataset = extra_input_dataset
+        self.enable_graph_encoder = enable_graph_encoder
+        self.graph_split_index = graph_split_index
         if self.align_dataset is not None:
             assert self.tgt_sizes is not None, "Both source and target needed when alignments are provided"
         self.append_bos = append_bos
@@ -190,6 +228,21 @@ class LanguagePairDataset(FairseqDataset):
     def __getitem__(self, index):
         tgt_item = self.tgt[index] if self.tgt is not None else None
         src_item = self.src[index]
+        if self.enable_graph_encoder:
+            try:
+                split_index = torch.nonzero(src_item==self.graph_split_index)[0][0]
+            except:  #handle empty graph
+                split_index = src_item.size(0)-1   
+            graph_item = src_item[split_index:]
+            src_item = src_item[:split_index]
+            bos = self.src_dict.bos()
+            eos = self.src_dict.eos()
+            if self.src[index][0] == bos:
+                # Add same of graph too
+                graph_item = torch.cat([torch.LongTensor([bos]), graph_item])
+            if self.src[index][-1] == eos:
+                # Add same to new src split
+                src_item = torch.cat([src_item, torch.LongTensor([eos])])
         # Append EOS to end of tgt sentence if it does not have an EOS and remove
         # EOS from end of src sentence if it exists. This is useful when we use
         # use existing datasets for opposite directions i.e., when we want to
@@ -206,12 +259,21 @@ class LanguagePairDataset(FairseqDataset):
 
             bos = self.src_dict.bos()
             if self.src[index][-1] != bos:
-                src_item = torch.cat([torch.LongTensor([bos]), self.src[index]])
+                if not self.enable_graph_encoder:
+                    src_item = torch.cat([torch.LongTensor([bos]), self.src[index]])
+                else:
+                    graph_item = torch.cat([torch.LongTensor([bos]), graph_item])
+                    src_item = torch.cat([torch.LongTensor([bos]), src_item])
 
         if self.remove_eos_from_source:
             eos = self.src_dict.eos()
             if self.src[index][-1] == eos:
-                src_item = self.src[index][:-1]
+                if not self.enable_graph_encoder:
+                    src_item = self.src[index][:-1]
+                else:
+                    src_item = src_item[:-1]
+                    graph_item = graph_item[:-1]
+
 
         example = {
             'id': index,
@@ -220,6 +282,11 @@ class LanguagePairDataset(FairseqDataset):
         }
         if self.align_dataset is not None:
             example['alignment'] = self.align_dataset[index]
+        if self.extra_input_dataset is not None:
+            example['extra_input'] = self.extra_input_dataset[index]
+        if self.enable_graph_encoder:
+            example['graph'] = graph_item
+        
         return example
 
     def __len__(self):

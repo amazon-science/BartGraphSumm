@@ -31,7 +31,7 @@ class BARTHubInterface(nn.Module):
         self.args = args
         self.task = task
         self.model = model
-
+        setattr(args, 'gpt2_encoder_json', "/home/ubuntu/fairseq/encoder-updated.json")
         self.bpe = encoders.build_bpe(args)
 
         self.max_positions = min(utils.resolve_max_positions(
@@ -89,11 +89,13 @@ class BARTHubInterface(nn.Module):
             return sentences[0]
         return sentences
 
-    def _build_sample(self, src_tokens: List[torch.LongTensor]):
+    def _build_sample(self, src_tokens: List[torch.LongTensor], ids=None, extra_input=None):
         # assert torch.is_tensor(src_tokens)
         dataset = self.task.build_dataset_for_inference(
             src_tokens,
             [x.numel() for x in src_tokens],
+            ids=ids,
+            extra_input=extra_input
         )
         sample = dataset.collater(dataset)
         sample = utils.apply_to_sample(
@@ -108,7 +110,11 @@ class BARTHubInterface(nn.Module):
         return [self.decode(x['tokens']) for x in hypos]
 
     def generate(self, tokens: List[torch.LongTensor], beam: int = 5, verbose: bool = False, **kwargs) -> torch.LongTensor:
-        sample = self._build_sample(tokens)
+        
+        if getattr(self.args, 'sentence_ranker', False):
+            sample = self._build_sample(tokens, ids=kwargs['sentence_ids'], extra_input=self.args.extra_input)
+        else:
+            sample = self._build_sample(tokens)
 
         # build generator using current args as well as any kwargs
         gen_args = copy.copy(self.args)

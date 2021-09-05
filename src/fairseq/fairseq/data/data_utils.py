@@ -93,6 +93,21 @@ def load_indexed_dataset(path, dictionary, dataset_impl=None, combine=False, def
         return ConcatDataset(datasets)
 
 
+def load_extra_dataset(path):
+    """ (Not a FairSeq module) A helper function to load the extra data needed as input"""
+    dataset = []
+    with open(path, 'r') as f:
+        for line in f.read().splitlines():
+            line = line.strip()
+            sample = line.split()
+            sample = [int(s) for s in sample]
+            dataset.append(sample)
+
+    return dataset
+
+
+
+
 @contextlib.contextmanager
 def numpy_seed(seed, *addl_seeds):
     """Context manager which seeds the NumPy PRNG with the specified seed and
