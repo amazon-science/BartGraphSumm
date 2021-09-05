@@ -28,7 +28,7 @@ This is the implementation of the paper [Efficiently Summarizing Text and Graph 
       - ```wget -N 'https://dl.fbaipublicfiles.com/fairseq/gpt2_bpe/encoder.json'```
       - ```wget -N 'https://dl.fbaipublicfiles.com/fairseq/gpt2_bpe/vocab.bpe'```
       - ```wget -N 'https://dl.fbaipublicfiles.com/fairseq/gpt2_bpe/dict.txt'```
-      - ADD ENCODER UPDATED
+      - Download `encoder-updated.json` file from `https://github.com/amazon-research/BartGraphSumm/blob/main/data/encoder-updated.json` and put it under `~/fairseq`
 5. Install NLTK and Spacy:
       - ```pip install nltk spacy more_itertools```
       - ```python -m spacy download en_core_web_sm```
@@ -52,7 +52,7 @@ This is the implementation of the paper [Efficiently Summarizing Text and Graph 
       - ```mkdir -p ~/results```
       - ```pip install rouge```
 
-## Prepare Multi-News Data:
+## Prepare Multi-News Data
 
 1. ```cd ~; mkdir data; cd data```
 2. multi-news-500 (Preprocessed and truncated data):
@@ -64,13 +64,13 @@ This is the implementation of the paper [Efficiently Summarizing Text and Graph 
 4. multi-news-full-raw (not processed and not truncated) -- This is only needed for graph construction in BART-Long-Graph models.
       - Get it from [original source](https://drive.google.com/drive/folders/1uDarzpu2HFc-vjXNJCRv2NIHzakpSGOw) and rename the folder as multi-news-full-raw; Also, rename the files inside this folder as follows: xxx.src as xxx.source and xxx.tgt as xxx.target
 
-## Code Setup:
+## Code Setup
 - ```cd ~; git clone git@github.com:amazon-research/BartGraphSumm.git```
 - ```cd ~/BartGraphSumm/src/fairseq```
 - ```pip install --editable .```
 - ```cd ../```
 
-## Train and Evaluate:
+## Train and Evaluate
 
 ### BART baseline
 Try the following command to train and evaluate the BART baseline model on Multi-News-500 dataset
