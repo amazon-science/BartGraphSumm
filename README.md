@@ -118,10 +118,10 @@ The scores correspond to the numbers from Bart-Long in Table 1 in the paper.
       - ```python graph_construction.py --data_path ~/data/multi-news-full-raw --output_path ~/data/multi-news-full-graph --split val```
       - ```python graph_construction.py --data_path ~/data/multi-news-full-raw --output_path ~/data/multi-news-full-graph --split test```
       - Load back the Pytorch 1.4 environment
-      - Now create the data by concatenating plan text input with graph information for each sample in the multi-news dataset: ```python prepare_data.py --output_path ~/data/multi-news-500-full-graph --max_length 500 --mode standard_with_graph_knowledge --graph_data_path ~/data/multi-news-full-graph --sentence_level_markers```
+      - Now create the data by concatenating plan text input with graph information for each sample in the multi-news dataset: ```python prepare_data.py --data_path ~/data/multi-news-full-clean --output_path ~/data/multi-news-500-500 --max_length 500 --mode standard_with_graph_knowledge --graph_data_path ~/data/multi-news-full-graph --sentence_level_markers```
 
 ```
-make -f bart-large-graph-linear.mk TASK=~/data/multi-news-500-full-graph MAX_TOKENS=1500 MAX_EPOCH=8 OUTPUT_DIR=~/results/bart-large-multinews-model3 rouge
+make -f bart-large-graph-linear.mk TASK=~/data/multi-news-500-500 MAX_TOKENS=1500 MAX_EPOCH=8 OUTPUT_DIR=~/results/bart-large-multinews-model3 rouge
 ```
 The ROUGE F1 scores (R1/R2/RL) can be found at
 ```
@@ -129,6 +129,21 @@ cat ~/results/bart-large-multinews-model3/test.rouge-stdout | grep ">"
 >> ROUGE-F(1/2/3/l): 49.03/19.04/24.04
 ```
 The scores correspond to the numbers from Bart-Long-Graph (500 tokens graph text) in Table 1 in the paper.
+
+To create the data with 1000 tokens for graph information: ```python prepare_data.py --data_path ~/data/multi-news-full-clean --output_path ~/data/multi-news-500-1000 --max_length 1000 --mode standard_with_graph_knowledge --graph_data_path ~/data/multi-news-full-graph --sentence_level_markers```
+
+and train the model: 
+```
+make -f bart-large-graph-linear.mk TASK=~/data/multi-news-500-1000 MAX_TOKENS=2500 MAX_EPOCH=8 LR=3e-05 OUTPUT_DIR=~/results/bart-large-multinews-model4 rouge
+```
+
+The ROUGE F1 scores (R1/R2/RL) can be found at
+```
+cat ~/results/bart-large-multinews-model4/test.rouge-stdout | grep ">"
+>> ROUGE-F(1/2/3/l): 49.24/18.99/23.97
+```
+The scores correspond to the numbers from Bart-Long-Graph (1000 tokens graph text) in Table 1 in the paper.
+
 
 ## Security
 
