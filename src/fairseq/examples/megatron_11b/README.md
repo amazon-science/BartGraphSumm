@@ -90,7 +90,7 @@ tar -xzvf megatron_11b.tar.gz
 
 #### 2. Download Wikitext-103
 ```bash
-wget https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-raw-v1.zip
+wget https://huggingface.co/datasets/mattdangerw/wikitext-103-raw/blob/main/wikitext-103-raw-v1.zip
 unzip wikitext-103-raw-v1.zip
 ```
 

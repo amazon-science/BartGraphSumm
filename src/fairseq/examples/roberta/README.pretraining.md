@@ -13,7 +13,7 @@ poorly, but it gives the general idea.
 
 First download the dataset:
 ```bash
-wget https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-raw-v1.zip
+wget https://huggingface.co/datasets/mattdangerw/wikitext-103-raw/blob/main/wikitext-103-raw-v1.zip
 unzip wikitext-103-raw-v1.zip
 ```
 

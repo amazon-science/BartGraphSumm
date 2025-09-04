@@ -2,7 +2,7 @@
 # Adapted from https://github.com/facebookresearch/MIXER/blob/master/prepareData.sh
 
 URLS=(
-    "https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-v1.zip"
+    "https://huggingface.co/datasets/mattdangerw/wikitext-103-raw/blob/main/wikitext-103-raw-v1.zip"
 )
 FILES=(
     "wikitext-103-v1.zip"
